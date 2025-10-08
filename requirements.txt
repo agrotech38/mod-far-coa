@@ -1,11 +1,5 @@
-streamlit
-python-docx
-mammoth
-docx2pdf
-pdf2image
-Pillow
-streamlit
-python-docx
-pandas
-openpyxl
-mammoth
+streamlit>=1.20
+python-docx>=0.8.11
+mammoth>=1.4.0
+requests>=2.28
+pytz>=2023.3     # fallback if zoneinfo not available
