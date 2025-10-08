@@ -5,39 +5,42 @@ import io
 import os
 import re
 import mammoth
-from docx.shared import RGBColor
+import requests
+from datetime import datetime
+try:
+    # Python 3.9+ zoneinfo
+    from zoneinfo import ZoneInfo
+    KOLKATA = ZoneInfo("Asia/Kolkata")
+except Exception:
+    # fallback
+    import pytz
+    KOLKATA = pytz.timezone("Asia/Kolkata")
 
-st.set_page_config(page_title="COA Placeholder Replacer", layout="wide")
+st.set_page_config(page_title="COA Placeholder Replacer — MOD / FAR", layout="wide")
 st.title("📄 COA Placeholder Replacer — MOD / FAR (No calculations)")
 
-# --- Configure template paths (update if needed) ---
-TEMPLATE_PATHS = {
-    "MOD": "/mnt/data/COA 7500-8000.docx",
-    "FAR": "/mnt/data/[ 2025 ] LIPL FAR COA.docx"
+# --- Defaults: local paths (these match the files you uploaded) ---
+DEFAULT_TEMPLATES = {
+    "MOD": "/mnt/data/PH LIPL MOD COA.docx",
+    "FAR": "/mnt/data/PH LIPL FAR COA.docx"
 }
 
-# --- Utility: normalize obvious brace typos in template text ---
+# --- Regex for placeholders like {{KEY}} ---
+PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_\-/]+)\s*\}\}")
+
+# --- Utility to normalize common broken placeholders e.g. '((BATCH_1}}' -> '{{BATCH_1}}' ---
 def normalize_broken_placeholders_in_doc(doc):
-    """
-    Fix some common broken placeholder formats like:
-      ((BATCH_1}}  ->  {{BATCH_1}}
-      {{BATCH_1))  ->  {{BATCH_1}}
-    This function edits runs in-place to correct those mistakes before replacement.
-    """
-    # patterns to normalize: replace '((' -> '{{' and '))' -> '}}' only when they appear near placeholder names
-    # We'll be conservative: only transform runs that contain either '((' or '))' or similar
     for para in doc.paragraphs:
         for run in para.runs:
-            if "((" in run.text or "))" in run.text or "}}" in run.text and "((" in run.text:
-                run.text = run.text.replace("((", "{{").replace("))", "}}").replace("}{", "}{")
+            if "((" in run.text or "))" in run.text:
+                run.text = run.text.replace("((", "{{").replace("))", "}}")
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs:
                     for run in para.runs:
-                        if "((" in run.text or "))" in run.text or "}}" in run.text and "((" in run.text:
-                            run.text = run.text.replace("((", "{{").replace("))", "}}").replace("}{", "}{")
-    # headers/footers
+                        if "((" in run.text or "))" in run.text:
+                            run.text = run.text.replace("((", "{{").replace("))", "}}")
     try:
         for section in doc.sections:
             header = section.header
@@ -53,92 +56,77 @@ def normalize_broken_placeholders_in_doc(doc):
     except Exception:
         pass
 
-
-# --- Placeholder regex (matches {{KEY}} where KEY is letters, digits, underscore or hyphen) ---
-PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_\-]+)\s*\}\}")
-
 # --- Replace placeholders in a paragraph while preserving style of first overlapping run ---
 def replace_placeholders_in_paragraph(paragraph, replacements):
     runs = paragraph.runs
     if not runs:
         return
 
-    # build full text and run offsets
+    # Build full text and offsets
     full_text = ""
-    offsets = []  # list of (run, start_index, end_index)
+    offsets = []  # (run, start, end)
     for run in runs:
         start = len(full_text)
         full_text += run.text
         end = len(full_text)
         offsets.append((run, start, end))
 
-    # find placeholders in this paragraph
     matches = list(PLACEHOLDER_RE.finditer(full_text))
     if not matches:
         return
 
-    # We'll process matches left-to-right; as we modify runs we also update offsets
-    # To keep it simple, we work on the original offsets and runs, but clear overlapping runs as we go.
     for match in matches:
         key = match.group(1)
         if key not in replacements:
             continue
         replacement_text = str(replacements[key])
+        p_start, p_end = match.start(), match.end()
 
-        placeholder_start, placeholder_end = match.start(), match.end()
-
-        # find overlapping runs
-        overlapping = [(r, s, e) for (r, s, e) in offsets if not (e <= placeholder_start or s >= placeholder_end)]
+        overlapping = [(r, s, e) for (r, s, e) in offsets if not (e <= p_start or s >= p_end)]
         if not overlapping:
             continue
 
-        style_run, s0, e0 = overlapping[0]
         first_run, first_s, first_e = overlapping[0]
         last_run, last_s, last_e = overlapping[-1]
 
-        # prefix (text in first run before placeholder)
-        prefix_len = max(0, placeholder_start - first_s)
+        # prefix & suffix around placeholder inside first/last runs
+        prefix_len = max(0, p_start - first_s)
         prefix = first_run.text[:prefix_len]
-
-        # suffix (text in last run after placeholder)
-        suffix_start_in_last = placeholder_end - last_s
+        suffix_start_in_last = p_end - last_s
         suffix = last_run.text[suffix_start_in_last:]
 
         # clear overlapping runs
         for r, _, _ in overlapping:
             r.text = ""
 
-        # set replacement into the first overlapping run
         new_text = prefix + replacement_text + suffix
         first_run.text = new_text
 
-        # try to copy basic font attributes from style_run to first_run
+        # copy style from the first overlapping run (safe copy)
         try:
-            font = style_run.font
-            first_run.font.name = font.name
-            first_run.font.size = font.size
+            font = first_run.font
+            # assign only if attributes exist (some may be None)
+            # copying same run's font to itself is harmless; copying from a style_run would be similar
+            # (we keep this for compatibility if you prefer to choose a particular run)
+            # note: if you wanted, pick 'style_run' differently
+            if font.name:
+                first_run.font.name = font.name
+            if font.size:
+                first_run.font.size = font.size
             first_run.font.bold = font.bold
             first_run.font.italic = font.italic
             first_run.font.underline = font.underline
-            if font.color is not None and getattr(font.color, "rgb", None) is not None:
+            if font.color and getattr(font.color, "rgb", None) is not None:
                 first_run.font.color.rgb = font.color.rgb
         except Exception:
-            # ignore attribute copy failures
             pass
 
 def advanced_replace_text_preserving_style(doc, replacements):
-    """
-    Replace placeholders across the document while preserving basic style.
-    Will run on main paragraphs, tables, headers and footers.
-    """
-    # Normalize obvious broken placeholders first
     normalize_broken_placeholders_in_doc(doc)
 
-    # body paragraphs
     for para in doc.paragraphs:
         replace_placeholders_in_paragraph(para, replacements)
 
-    # tables
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -157,202 +145,227 @@ def advanced_replace_text_preserving_style(doc, replacements):
     except Exception:
         pass
 
-# --- Convert DOCX to HTML for preview ---
-def docx_to_html(docx_path):
-    with open(docx_path, "rb") as docx_file:
-        result = mammoth.convert_to_html(docx_file)
-        return result.value
+# --- Convert to HTML for preview using mammoth ---
+def docx_to_html_bytes(docx_bytes):
+    result = mammoth.convert_to_html(io.BytesIO(docx_bytes))
+    return result.value
 
-# --- UI: choose COA type ---
+# --- Helper: download raw file from GitHub raw URL (returns bytes or None) ---
+def download_from_github_raw(raw_url):
+    try:
+        r = requests.get(raw_url, timeout=15)
+        r.raise_for_status()
+        return r.content
+    except Exception as e:
+        st.warning(f"Failed to download from GitHub URL: {e}")
+        return None
+
+# --- Sidebar: template source options ---
+st.sidebar.header("Template Source / Options")
+use_default_paths = st.sidebar.checkbox("Use server default templates (if available)", value=True)
+st.sidebar.markdown("You can also upload templates or provide GitHub raw URLs.")
+
+uploaded_mod = None
+uploaded_far = None
+mod_github_url = st.sidebar.text_input("MOD template raw GitHub URL (optional)", value="")
+far_github_url = st.sidebar.text_input("FAR template raw GitHub URL (optional)", value="")
+
+file_source = st.sidebar.selectbox("If uploading, choose which template to upload", ["None", "Upload MOD", "Upload FAR", "Upload Both"])
+if file_source in ("Upload MOD", "Upload Both"):
+    uploaded_mod = st.sidebar.file_uploader("Upload MOD .docx", type=["docx"], key="upload_mod")
+if file_source in ("Upload FAR", "Upload Both"):
+    uploaded_far = st.sidebar.file_uploader("Upload FAR .docx", type=["docx"], key="upload_far")
+
+# Which COA to generate
 coa_type = st.selectbox("Choose COA type", ["MOD", "FAR"])
 
-template_path = TEMPLATE_PATHS.get(coa_type)
-st.info(f"Using template: {os.path.basename(template_path) if template_path else 'Not found'}")
+# Determine template bytes for selected COA
+def get_template_bytes(coa_type):
+    # priority: uploaded in sidebar -> GitHub raw URL -> default local path
+    if coa_type == "MOD" and uploaded_mod is not None:
+        return uploaded_mod.read()
+    if coa_type == "FAR" and uploaded_far is not None:
+        return uploaded_far.read()
 
-# If template not found, allow upload
-if not template_path or not os.path.exists(template_path):
-    st.warning("Template not found in expected path. Please upload the template (.docx) for this COA type.")
-    uploaded = st.file_uploader(f"Upload {coa_type} template (.docx)", type=["docx"], key=f"upload_{coa_type}")
-    if uploaded is not None:
-        # save uploaded to a temporary file and use it
-        tmp_path = f"/tmp/{coa_type}_template.docx"
-        with open(tmp_path, "wb") as f:
-            f.write(uploaded.read())
-        template_path = tmp_path
-        st.success("Template uploaded and saved for this session.")
+    if coa_type == "MOD" and mod_github_url.strip():
+        b = download_from_github_raw(mod_github_url.strip())
+        if b:
+            return b
+    if coa_type == "FAR" and far_github_url.strip():
+        b = download_from_github_raw(far_github_url.strip())
+        if b:
+            return b
 
-# --- Build form fields for four batches (per your mapping) ---
-st.markdown("### Enter COA values (four batches)")
+    # fallback: default file path
+    path = DEFAULT_TEMPLATES.get(coa_type)
+    if path and os.path.exists(path):
+        with open(path, "rb") as f:
+            return f.read()
+    return None
+
+# --- Default date (DDMMYYYY) in Asia/Kolkata timezone, editable by user ---
+now_kolkata = datetime.now(KOLKATA)
+default_ddmmyyyy = now_kolkata.strftime("%d%m%Y")
+
+st.markdown("### Enter values (four batches)")
 with st.form("coa_form"):
-    date_val = st.text_input("DATE (e.g., DD-MM-YYYY)", value="")
-    # Batch labels (BATCH_1..BATCH_4)
-    batch_1 = st.text_input("BATCH_1 (Batch 1 label)", value="")
-    batch_2 = st.text_input("BATCH_2 (Batch 2 label)", value="")
-    batch_3 = st.text_input("BATCH_3 (Batch 3 label)", value="")
-    batch_4 = st.text_input("BATCH_4 (Batch 4 label)", value="")
+    date_field = st.text_input("Date (DDMMYYYY)", value=default_ddmmyyyy)
 
-    # Moisture M1..M4
-    st.write("#### Moisture (M1..M4)")
-    m1 = st.text_input("M1 (Batch 1 moisture %)", value="")
-    m2 = st.text_input("M2 (Batch 2 moisture %)", value="")
-    m3 = st.text_input("M3 (Batch 3 moisture %)", value="")
-    m4 = st.text_input("M4 (Batch 4 moisture %)", value="")
+    # Common batch labels
+    st.write("#### Batch labels")
+    batch_1 = st.text_input("BATCH_1", value="")
+    batch_2 = st.text_input("BATCH_2", value="")
+    batch_3 = st.text_input("BATCH_3", value="")
+    batch_4 = st.text_input("BATCH_4", value="")
 
-    # Viscosity 2h: B1V1..B4V1
-    st.write("#### Viscosity after 2 hours (B1V1..B4V1)")
-    b1v1 = st.text_input("B1V1 (Batch 1 - 2h)", value="")
-    b2v1 = st.text_input("B2V1 (Batch 2 - 2h)", value="")
-    b3v1 = st.text_input("B3V1 (Batch 3 - 2h)", value="")
-    b4v1 = st.text_input("B4V1 (Batch 4 - 2h)", value="")
+    # Fields differ by COA type
+    if coa_type == "MOD":
+        st.write("#### MOD fields (Moisture, 30min, 60min, pH)")
+        # Moisture
+        m1 = st.text_input("M1 (Batch1 Moisture)", value="")
+        m2 = st.text_input("M2 (Batch2 Moisture)", value="")
+        m3 = st.text_input("M3 (Batch3 Moisture)", value="")
+        m4 = st.text_input("M4 (Batch4 Moisture)", value="")
 
-    # Viscosity 24h: B1V2..B4V2
-    st.write("#### Viscosity after 24 hours (B1V2..B4V2)")
-    b1v2 = st.text_input("B1V2 (Batch 1 - 24h)", value="")
-    b2v2 = st.text_input("B2V2 (Batch 2 - 24h)", value="")
-    b3v2 = st.text_input("B3V2 (Batch 3 - 24h)", value="")
-    b4v2 = st.text_input("B4V2 (Batch 4 - 24h)", value="")
+        # Viscosities: 30min -> B1V1..B4V1 ; 60min -> B1V2..B4V2
+        b1v1 = st.text_input("B1V1 (Batch1 - 30min viscosity)", value="")
+        b2v1 = st.text_input("B2V1 (Batch2 - 30min viscosity)", value="")
+        b3v1 = st.text_input("B3V1 (Batch3 - 30min viscosity)", value="")
+        b4v1 = st.text_input("B4V1 (Batch4 - 30min viscosity)", value="")
 
-    # pH PH1..PH4
-    st.write("#### pH (PH1..PH4)")
-    ph1 = st.text_input("PH1 (Batch 1 pH)", value="")
-    ph2 = st.text_input("PH2 (Batch 2 pH)", value="")
-    ph3 = st.text_input("PH3 (Batch 3 pH)", value="")
-    ph4 = st.text_input("PH4 (Batch 4 pH)", value="")
+        b1v2 = st.text_input("B1V2 (Batch1 - 60min viscosity)", value="")
+        b2v2 = st.text_input("B2V2 (Batch2 - 60min viscosity)", value="")
+        b3v2 = st.text_input("B3V2 (Batch3 - 60min viscosity)", value="")
+        b4v2 = st.text_input("B4V2 (Batch4 - 60min viscosity)", value="")
 
-    # Mesh MESH1..MESH4
-    st.write("#### 200 Mesh (MESH1..MESH4)")
-    mesh1 = st.text_input("MESH1 (Batch 1 % through 200 mesh)", value="")
-    mesh2 = st.text_input("MESH2 (Batch 2 % through 200 mesh)", value="")
-    mesh3 = st.text_input("MESH3 (Batch 3 % through 200 mesh)", value="")
-    mesh4 = st.text_input("MESH4 (Batch 4 % through 200 mesh)", value="")
+        # pH
+        ph1 = st.text_input("PH1 (Batch1 pH)", value="")
+        ph2 = st.text_input("PH2 (Batch2 pH)", value="")
+        ph3 = st.text_input("PH3 (Batch3 pH)", value="")
+        ph4 = st.text_input("PH4 (Batch4 pH)", value="")
 
-    # Bulk Density BD1..BD4
-    st.write("#### Bulk Density (BD1..BD4)")
-    bd1 = st.text_input("BD1 (Batch 1 Bulk Density)", value="")
-    bd2 = st.text_input("BD2 (Batch 2 Bulk Density)", value="")
-    bd3 = st.text_input("BD3 (Batch 3 Bulk Density)", value="")
-    bd4 = st.text_input("BD4 (Batch 4 Bulk Density)", value="")
+    else:  # FAR
+        st.write("#### FAR fields (Moisture, 2h, 24h, pH, mesh, BD, Fann, Fann30)")
+        # Moisture
+        m1 = st.text_input("M1 (Batch1 Moisture)", value="")
+        m2 = st.text_input("M2 (Batch2 Moisture)", value="")
+        m3 = st.text_input("M3 (Batch3 Moisture)", value="")
+        m4 = st.text_input("M4 (Batch4 Moisture)", value="")
 
-    # Fann @ 3' F1..F4
-    st.write("#### Fann Viscosity @ 3' (F1..F4)")
-    f1 = st.text_input("F1 (Batch 1 Fann 3min)", value="")
-    f2 = st.text_input("F2 (Batch 2 Fann 3min)", value="")
-    f3 = st.text_input("F3 (Batch 3 Fann 3min)", value="")
-    f4 = st.text_input("F4 (Batch 4 Fann 3min)", value="")
+        # Viscosities: 2h -> B1V1.. ; 24h -> B1V2..
+        b1v1 = st.text_input("B1V1 (Batch1 - 2h viscosity)", value="")
+        b2v1 = st.text_input("B2V1 (Batch2 - 2h viscosity)", value="")
+        b3v1 = st.text_input("B3V1 (Batch3 - 2h viscosity)", value="")
+        b4v1 = st.text_input("B4V1 (Batch4 - 2h viscosity)", value="")
 
-    # Fann @ 30' FV1..FV4
-    st.write("#### Fann Viscosity @ 30' (FV1..FV4)")
-    fv1 = st.text_input("FV1 (Batch 1 Fann 30min)", value="")
-    fv2 = st.text_input("FV2 (Batch 2 Fann 30min)", value="")
-    fv3 = st.text_input("FV3 (Batch 3 Fann 30min)", value="")
-    fv4 = st.text_input("FV4 (Batch 4 Fann 30min)", value="")
+        b1v2 = st.text_input("B1V2 (Batch1 - 24h viscosity)", value="")
+        b2v2 = st.text_input("B2V2 (Batch2 - 24h viscosity)", value="")
+        b3v2 = st.text_input("B3V2 (Batch3 - 24h viscosity)", value="")
+        b4v2 = st.text_input("B4V2 (Batch4 - 24h viscosity)", value="")
+
+        # pH
+        ph1 = st.text_input("PH1 (Batch1 pH)", value="")
+        ph2 = st.text_input("PH2 (Batch2 pH)", value="")
+        ph3 = st.text_input("PH3 (Batch3 pH)", value="")
+        ph4 = st.text_input("PH4 (Batch4 pH)", value="")
+
+        # Mesh
+        mesh1 = st.text_input("MESH1 (Batch1 through 200 mesh %)", value="")
+        mesh2 = st.text_input("MESH2 (Batch2 through 200 mesh %)", value="")
+        mesh3 = st.text_input("MESH3 (Batch3 through 200 mesh %)", value="")
+        mesh4 = st.text_input("MESH4 (Batch4 through 200 mesh %)", value="")
+
+        # Bulk Density
+        bd1 = st.text_input("BD1 (Batch1 Bulk Density)", value="")
+        bd2 = st.text_input("BD2 (Batch2 Bulk Density)", value="")
+        bd3 = st.text_input("BD3 (Batch3 Bulk Density)", value="")
+        bd4 = st.text_input("BD4 (Batch4 Bulk Density)", value="")
+
+        # Fann 3'
+        f1 = st.text_input("F1 (Batch1 Fann @ 3')", value="")
+        f2 = st.text_input("F2 (Batch2 Fann @ 3')", value="")
+        f3 = st.text_input("F3 (Batch3 Fann @ 3')", value="")
+        f4 = st.text_input("F4 (Batch4 Fann @ 3')", value="")
+
+        # Fann 30'
+        fv1 = st.text_input("FV1 (Batch1 Fann @ 30')", value="")
+        fv2 = st.text_input("FV2 (Batch2 Fann @ 30')", value="")
+        fv3 = st.text_input("FV3 (Batch3 Fann @ 30')", value="")
+        fv4 = st.text_input("FV4 (Batch4 Fann @ 30')", value="")
 
     submitted = st.form_submit_button("Generate COA")
 
-# --- On submit: perform placeholder replacement and provide preview & download ---
+# --- On submit: build replacements and process template ---
 if submitted:
-    if not template_path or not os.path.exists(template_path):
-        st.error("Template file not found. Please upload the template or correct TEMPLATE_PATHS.")
+    template_bytes = get_template_bytes(coa_type)
+    if template_bytes is None:
+        st.error("Template not available. Provide via default path, upload, or GitHub raw URL.")
     else:
-        # build replacements dictionary matching template placeholders exactly
-        replacements = {
-            # date (matching placeholder seen in FAR: DD-MM-YYYY)
-            "DD-MM-YYYY": date_val,
-
-            # batch labels
-            "BATCH_1": batch_1,
-            "BATCH_2": batch_2,
-            "BATCH_3": batch_3,
-            "BATCH_4": batch_4,
-
-            # moisture
-            "M1": m1,
-            "M2": m2,
-            "M3": m3,
-            "M4": m4,
-
-            # viscosities (2h)
-            "B1V1": b1v1,
-            "B2V1": b2v1,
-            "B3V1": b3v1,
-            "B4V1": b4v1,
-
-            # viscosities (24h)
-            "B1V2": b1v2,
-            "B2V2": b2v2,
-            "B3V2": b3v2,
-            "B4V2": b4v2,
-
-            # pH
-            "PH1": ph1,
-            "PH2": ph2,
-            "PH3": ph3,
-            "PH4": ph4,
-
-            # mesh
-            "MESH1": mesh1,
-            "MESH2": mesh2,
-            "MESH3": mesh3,
-            "MESH4": mesh4,
-
-            # bulk density
-            "BD1": bd1,
-            "BD2": bd2,
-            "BD3": bd3,
-            "BD4": bd4,
-
-            # fann @ 3'
-            "F1": f1,
-            "F2": f2,
-            "F3": f3,
-            "F4": f4,
-
-            # fann @ 30'
-            "FV1": fv1,
-            "FV2": fv2,
-            "FV3": fv3,
-            "FV4": fv4
-        }
-
-        # load template
+        # load docx from bytes into python-docx Document
         try:
-            doc = Document(template_path)
+            doc = Document(io.BytesIO(template_bytes))
         except Exception as e:
-            st.error(f"Failed to open template: {e}")
+            st.error(f"Failed to open template as docx: {e}")
             doc = None
 
         if doc:
-            # perform replacements
+            # Build replacements based on COA type
+            replacements = {}
+            # Date mapping: two templates use different date placeholder styles in your files:
+            # - MOD file uses {{DD/MM/YYYY}} (per inspection)
+            # - FAR file uses {{DD-MM-YYYY}}
+            # We'll populate both keys so whichever exists in template will be replaced.
+            replacements["DD/MM/YYYY"] = date_field
+            replacements["DD-MM-YYYY"] = date_field
+
+            # Batch labels
+            replacements.update({
+                "BATCH_1": batch_1,
+                "BATCH_2": batch_2,
+                "BATCH_3": batch_3,
+                "BATCH_4": batch_4
+            })
+
+            # Common moisture & viscosities & pH
+            replacements.update({
+                "M1": m1, "M2": m2, "M3": m3, "M4": m4,
+                "B1V1": b1v1, "B2V1": b2v1, "B3V1": b3v1, "B4V1": b4v1,
+                "B1V2": b1v2, "B2V2": b2v2, "B3V2": b3v2, "B4V2": b4v2,
+                "PH1": ph1, "PH2": ph2, "PH3": ph3, "PH4": ph4
+            })
+
+            # Additional FAR-only fields
+            if coa_type == "FAR":
+                replacements.update({
+                    "MESH1": mesh1, "MESH2": mesh2, "MESH3": mesh3, "MESH4": mesh4,
+                    "BD1": bd1, "BD2": bd2, "BD3": bd3, "BD4": bd4,
+                    "F1": f1, "F2": f2, "F3": f3, "F4": f4,
+                    "FV1": fv1, "FV2": fv2, "FV3": fv3, "FV4": fv4
+                })
+
+            # Perform replacement
             advanced_replace_text_preserving_style(doc, replacements)
 
-            # save generated file to a BytesIO buffer
-            output_filename = f"COA_{coa_type}_generated.docx"
-            output_path = f"/tmp/{output_filename}"
+            # Save to BytesIO
+            out_buffer = io.BytesIO()
+            doc.save(out_buffer)
+            out_bytes = out_buffer.getvalue()
+
+            # Preview using mammoth (HTML)
             try:
-                doc.save(output_path)
+                html = docx_to_html_bytes(out_bytes)
+                st.subheader("📄 Preview (HTML)")
+                st.components.v1.html(f"<div style='padding:12px'>{html}</div>", height=700, scrolling=True)
             except Exception as e:
-                st.error(f"Failed to save generated DOCX: {e}")
-                output_path = None
+                st.warning(f"Preview (mammoth) failed: {e}. You can still download the DOCX.")
 
-            if output_path and os.path.exists(output_path):
-                # try preview
-                try:
-                    html = docx_to_html(output_path)
-                    st.subheader("📄 Preview")
-                    st.components.v1.html(f"<div style='padding:10px'>{html}</div>", height=700, scrolling=True)
-                except Exception as e:
-                    st.warning(f"Preview failed ({e}). You can still download the generated file below.")
+            # Download button
+            filename = f"COA_{coa_type}_{batch_1 or 'batch'}.docx"
+            st.download_button(
+                label="📥 Download generated DOCX",
+                data=out_bytes,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
 
-                # Provide download
-                with open(output_path, "rb") as f:
-                    doc_bytes = f.read()
-                buffer = io.BytesIO(doc_bytes)
-
-                st.download_button(
-                    label="📥 Download generated COA (DOCX)",
-                    data=buffer,
-                    file_name=output_filename,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-
-                st.success("COA generated. Check the downloaded file and open in Word to confirm formatting.")
+            st.success("Generated. Open the downloaded DOCX in MS Word to confirm visual formatting.")
