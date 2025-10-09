@@ -16,7 +16,7 @@ except Exception:
     import pytz
     KOLKATA = pytz.timezone("Asia/Kolkata")
 
-st.set_page_config(page_title="COA Placeholder Replacer — MOD / FAR", layout="wide")
+st.set_page_config(page_title="ModFar COA Generator", layout="wide")
 st.title("📄 COA Placeholder Replacer — MOD / FAR (No calculations)")
 
 # --- Defaults: local paths (these match the files you uploaded) ---
