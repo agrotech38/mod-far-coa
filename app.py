@@ -47,7 +47,7 @@ def normalize_broken_placeholders_in_doc(doc):
                         run.text = run.text.replace("((", "{{").replace("))", "}}")
             footer = section.footer
             for para in footer.paragraphs:
-                for run in para.runs:
+                for run in run in para.runs:
                     if "((" in run.text or "))" in run.text:
                         run.text = run.text.replace("((", "{{").replace("))", "}}")
     except Exception:
@@ -189,7 +189,8 @@ current_container = 1
 
 with tab_general:
     st.subheader("General (used only for filename)")
-    po_id = st.text_input("P.O. ID (used for filename only)", value="", key="po_id")
+    # <-- pre-filled PO ID prefix here; user can edit or append -->
+    po_id = st.text_input("P.O. ID (used for filename only)", value="LIPL202526", key="po_id")
     total_containers = st.number_input("Total Number of Containers", min_value=1, step=1, value=1, key="total_containers")
     current_container = st.number_input("Current Container Number", min_value=1, step=1, value=1, key="current_container")
     st.info("These values will not be written into the DOCX — they are used only to create the output filename.")
