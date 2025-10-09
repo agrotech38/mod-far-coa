@@ -5,14 +5,11 @@ import io
 import os
 import re
 import mammoth
-import requests
 from datetime import datetime
 try:
-    # Python 3.9+ zoneinfo
     from zoneinfo import ZoneInfo
     KOLKATA = ZoneInfo("Asia/Kolkata")
 except Exception:
-    # fallback
     import pytz
     KOLKATA = pytz.timezone("Asia/Kolkata")
 
@@ -105,10 +102,6 @@ def replace_placeholders_in_paragraph(paragraph, replacements):
         # copy style from the first overlapping run (safe copy)
         try:
             font = first_run.font
-            # assign only if attributes exist (some may be None)
-            # copying same run's font to itself is harmless; copying from a style_run would be similar
-            # (we keep this for compatibility if you prefer to choose a particular run)
-            # note: if you wanted, pick 'style_run' differently
             if font.name:
                 first_run.font.name = font.name
             if font.size:
@@ -150,158 +143,103 @@ def docx_to_html_bytes(docx_bytes):
     result = mammoth.convert_to_html(io.BytesIO(docx_bytes))
     return result.value
 
-# --- Helper: download raw file from GitHub raw URL (returns bytes or None) ---
-def download_from_github_raw(raw_url):
-    try:
-        r = requests.get(raw_url, timeout=15)
-        r.raise_for_status()
-        return r.content
-    except Exception as e:
-        st.warning(f"Failed to download from GitHub URL: {e}")
-        return None
-
-# --- Sidebar: template source options ---
-st.sidebar.header("Template Source / Options")
-use_default_paths = st.sidebar.checkbox("Use server default templates (if available)", value=True)
-st.sidebar.markdown("You can also upload templates or provide GitHub raw URLs.")
-
-uploaded_mod = None
-uploaded_far = None
-mod_github_url = st.sidebar.text_input("MOD template raw GitHub URL (optional)", value="")
-far_github_url = st.sidebar.text_input("FAR template raw GitHub URL (optional)", value="")
-
-file_source = st.sidebar.selectbox("If uploading, choose which template to upload", ["None", "Upload MOD", "Upload FAR", "Upload Both"])
-if file_source in ("Upload MOD", "Upload Both"):
-    uploaded_mod = st.sidebar.file_uploader("Upload MOD .docx", type=["docx"], key="upload_mod")
-if file_source in ("Upload FAR", "Upload Both"):
-    uploaded_far = st.sidebar.file_uploader("Upload FAR .docx", type=["docx"], key="upload_far")
-
-# Which COA to generate
-coa_type = st.selectbox("Choose COA type", ["MOD", "FAR"])
-
-# Determine template bytes for selected COA
+# --- Simplified template retrieval: only local default templates are used --- 
 def get_template_bytes(coa_type):
-    # priority: uploaded in sidebar -> GitHub raw URL -> default local path
-    if coa_type == "MOD" and uploaded_mod is not None:
-        return uploaded_mod.read()
-    if coa_type == "FAR" and uploaded_far is not None:
-        return uploaded_far.read()
-
-    if coa_type == "MOD" and mod_github_url.strip():
-        b = download_from_github_raw(mod_github_url.strip())
-        if b:
-            return b
-    if coa_type == "FAR" and far_github_url.strip():
-        b = download_from_github_raw(far_github_url.strip())
-        if b:
-            return b
-
-    # fallback: default file path
     path = DEFAULT_TEMPLATES.get(coa_type)
     if path and os.path.exists(path):
         with open(path, "rb") as f:
             return f.read()
     return None
 
-# --- Default date (DDMMYYYY) in Asia/Kolkata timezone, editable by user ---
+# --- Default date (DD/MM/YYYY) in Asia/Kolkata timezone, editable by user ---
 now_kolkata = datetime.now(KOLKATA)
-default_ddmmyyyy = now_kolkata.strftime("%d%m%Y")
+default_ddmmyyyy_slash = now_kolkata.strftime("%d/%m/%Y")  # DD/MM/YYYY
 
-st.markdown("### Enter values (four batches)")
-with st.form("coa_form"):
-    date_field = st.text_input("Date (DDMMYYYY)", value=default_ddmmyyyy)
+st.markdown("### Enter values (fill Batch 1 completely, then Batch 2, then Batch 3, then Batch 4)")
+coa_type = st.selectbox("Choose COA type", ["MOD", "FAR"])
 
-    # Common batch labels
-    st.write("#### Batch labels")
-    batch_1 = st.text_input("BATCH_1", value="")
-    batch_2 = st.text_input("BATCH_2", value="")
-    batch_3 = st.text_input("BATCH_3", value="")
-    batch_4 = st.text_input("BATCH_4", value="")
+# Use tabs: one tab per batch to enforce batch-by-batch entry
+tab1, tab2, tab3, tab4 = st.tabs(["Batch 1", "Batch 2", "Batch 3", "Batch 4"])
 
-    # Fields differ by COA type
+# holder for batch inputs
+batches = {"1": {}, "2": {}, "3": {}, "4": {}}
+
+# Date input placed in Batch 1 tab (editable)
+with tab1:
+    st.subheader("Batch 1")
+    date_field = st.text_input("Date (DD/MM/YYYY)", value=default_ddmmyyyy_slash, key="date_field")
+    batches["1"]["BATCH"] = st.text_input("BATCH_1 (Label)", key="batch1_label")
+    batches["1"]["M"] = st.text_input("M1 (Moisture)", key="m1")
     if coa_type == "MOD":
-        st.write("#### MOD fields (Moisture, 30min, 60min, pH)")
-        # Moisture
-        m1 = st.text_input("M1 (Batch1 Moisture)", value="")
-        m2 = st.text_input("M2 (Batch2 Moisture)", value="")
-        m3 = st.text_input("M3 (Batch3 Moisture)", value="")
-        m4 = st.text_input("M4 (Batch4 Moisture)", value="")
+        batches["1"]["B1V1"] = st.text_input("B1V1 (30min viscosity)", key="b1v1_mod")
+        batches["1"]["B1V2"] = st.text_input("B1V2 (60min viscosity)", key="b1v2_mod")
+        batches["1"]["PH"] = st.text_input("PH1 (pH)", key="ph1_mod")
+    else:
+        batches["1"]["B1V1"] = st.text_input("B1V1 (2h viscosity)", key="b1v1_far")
+        batches["1"]["B1V2"] = st.text_input("B1V2 (24h viscosity)", key="b1v2_far")
+        batches["1"]["PH"] = st.text_input("PH1 (pH)", key="ph1_far")
+        batches["1"]["MESH"] = st.text_input("MESH1 (200 mesh %)", key="mesh1")
+        batches["1"]["BD"] = st.text_input("BD1 (Bulk Density)", key="bd1")
+        batches["1"]["F"] = st.text_input("F1 (Fann 3')", key="f1")
+        batches["1"]["FV"] = st.text_input("FV1 (Fann 30')", key="fv1")
 
-        # Viscosities: 30min -> B1V1..B4V1 ; 60min -> B1V2..B4V2
-        b1v1 = st.text_input("B1V1 (Batch1 - 30min viscosity)", value="")
-        b2v1 = st.text_input("B2V1 (Batch2 - 30min viscosity)", value="")
-        b3v1 = st.text_input("B3V1 (Batch3 - 30min viscosity)", value="")
-        b4v1 = st.text_input("B4V1 (Batch4 - 30min viscosity)", value="")
+with tab2:
+    st.subheader("Batch 2")
+    batches["2"]["BATCH"] = st.text_input("BATCH_2 (Label)", key="batch2_label")
+    batches["2"]["M"] = st.text_input("M2 (Moisture)", key="m2")
+    if coa_type == "MOD":
+        batches["2"]["B1V1"] = st.text_input("B2V1 (30min viscosity)", key="b2v1_mod")
+        batches["2"]["B1V2"] = st.text_input("B2V2 (60min viscosity)", key="b2v2_mod")
+        batches["2"]["PH"] = st.text_input("PH2 (pH)", key="ph2_mod")
+    else:
+        batches["2"]["B1V1"] = st.text_input("B2V1 (2h viscosity)", key="b2v1_far")
+        batches["2"]["B1V2"] = st.text_input("B2V2 (24h viscosity)", key="b2v2_far")
+        batches["2"]["PH"] = st.text_input("PH2 (pH)", key="ph2_far")
+        batches["2"]["MESH"] = st.text_input("MESH2 (200 mesh %)", key="mesh2")
+        batches["2"]["BD"] = st.text_input("BD2 (Bulk Density)", key="bd2")
+        batches["2"]["F"] = st.text_input("F2 (Fann 3')", key="f2")
+        batches["2"]["FV"] = st.text_input("FV2 (Fann 30')", key="fv2")
 
-        b1v2 = st.text_input("B1V2 (Batch1 - 60min viscosity)", value="")
-        b2v2 = st.text_input("B2V2 (Batch2 - 60min viscosity)", value="")
-        b3v2 = st.text_input("B3V2 (Batch3 - 60min viscosity)", value="")
-        b4v2 = st.text_input("B4V2 (Batch4 - 60min viscosity)", value="")
+with tab3:
+    st.subheader("Batch 3")
+    batches["3"]["BATCH"] = st.text_input("BATCH_3 (Label)", key="batch3_label")
+    batches["3"]["M"] = st.text_input("M3 (Moisture)", key="m3")
+    if coa_type == "MOD":
+        batches["3"]["B1V1"] = st.text_input("B3V1 (30min viscosity)", key="b3v1_mod")
+        batches["3"]["B1V2"] = st.text_input("B3V2 (60min viscosity)", key="b3v2_mod")
+        batches["3"]["PH"] = st.text_input("PH3 (pH)", key="ph3_mod")
+    else:
+        batches["3"]["B1V1"] = st.text_input("B3V1 (2h viscosity)", key="b3v1_far")
+        batches["3"]["B1V2"] = st.text_input("B3V2 (24h viscosity)", key="b3v2_far")
+        batches["3"]["PH"] = st.text_input("PH3 (pH)", key="ph3_far")
+        batches["3"]["MESH"] = st.text_input("MESH3 (200 mesh %)", key="mesh3")
+        batches["3"]["BD"] = st.text_input("BD3 (Bulk Density)", key="bd3")
+        batches["3"]["F"] = st.text_input("F3 (Fann 3')", key="f3")
+        batches["3"]["FV"] = st.text_input("FV3 (Fann 30')", key="fv3")
 
-        # pH
-        ph1 = st.text_input("PH1 (Batch1 pH)", value="")
-        ph2 = st.text_input("PH2 (Batch2 pH)", value="")
-        ph3 = st.text_input("PH3 (Batch3 pH)", value="")
-        ph4 = st.text_input("PH4 (Batch4 pH)", value="")
+with tab4:
+    st.subheader("Batch 4")
+    batches["4"]["BATCH"] = st.text_input("BATCH_4 (Label)", key="batch4_label")
+    batches["4"]["M"] = st.text_input("M4 (Moisture)", key="m4")
+    if coa_type == "MOD":
+        batches["4"]["B1V1"] = st.text_input("B4V1 (30min viscosity)", key="b4v1_mod")
+        batches["4"]["B1V2"] = st.text_input("B4V2 (60min viscosity)", key="b4v2_mod")
+        batches["4"]["PH"] = st.text_input("PH4 (pH)", key="ph4_mod")
+    else:
+        batches["4"]["B1V1"] = st.text_input("B4V1 (2h viscosity)", key="b4v1_far")
+        batches["4"]["B1V2"] = st.text_input("B4V2 (24h viscosity)", key="b4v2_far")
+        batches["4"]["PH"] = st.text_input("PH4 (pH)", key="ph4_far")
+        batches["4"]["MESH"] = st.text_input("MESH4 (200 mesh %)", key="mesh4")
+        batches["4"]["BD"] = st.text_input("BD4 (Bulk Density)", key="bd4")
+        batches["4"]["F"] = st.text_input("F4 (Fann 3')", key="f4")
+        batches["4"]["FV"] = st.text_input("FV4 (Fann 30')", key="fv4")
 
-    else:  # FAR
-        st.write("#### FAR fields (Moisture, 2h, 24h, pH, mesh, BD, Fann, Fann30)")
-        # Moisture
-        m1 = st.text_input("M1 (Batch1 Moisture)", value="")
-        m2 = st.text_input("M2 (Batch2 Moisture)", value="")
-        m3 = st.text_input("M3 (Batch3 Moisture)", value="")
-        m4 = st.text_input("M4 (Batch4 Moisture)", value="")
-
-        # Viscosities: 2h -> B1V1.. ; 24h -> B1V2..
-        b1v1 = st.text_input("B1V1 (Batch1 - 2h viscosity)", value="")
-        b2v1 = st.text_input("B2V1 (Batch2 - 2h viscosity)", value="")
-        b3v1 = st.text_input("B3V1 (Batch3 - 2h viscosity)", value="")
-        b4v1 = st.text_input("B4V1 (Batch4 - 2h viscosity)", value="")
-
-        b1v2 = st.text_input("B1V2 (Batch1 - 24h viscosity)", value="")
-        b2v2 = st.text_input("B2V2 (Batch2 - 24h viscosity)", value="")
-        b3v2 = st.text_input("B3V2 (Batch3 - 24h viscosity)", value="")
-        b4v2 = st.text_input("B4V2 (Batch4 - 24h viscosity)", value="")
-
-        # pH
-        ph1 = st.text_input("PH1 (Batch1 pH)", value="")
-        ph2 = st.text_input("PH2 (Batch2 pH)", value="")
-        ph3 = st.text_input("PH3 (Batch3 pH)", value="")
-        ph4 = st.text_input("PH4 (Batch4 pH)", value="")
-
-        # Mesh
-        mesh1 = st.text_input("MESH1 (Batch1 through 200 mesh %)", value="")
-        mesh2 = st.text_input("MESH2 (Batch2 through 200 mesh %)", value="")
-        mesh3 = st.text_input("MESH3 (Batch3 through 200 mesh %)", value="")
-        mesh4 = st.text_input("MESH4 (Batch4 through 200 mesh %)", value="")
-
-        # Bulk Density
-        bd1 = st.text_input("BD1 (Batch1 Bulk Density)", value="")
-        bd2 = st.text_input("BD2 (Batch2 Bulk Density)", value="")
-        bd3 = st.text_input("BD3 (Batch3 Bulk Density)", value="")
-        bd4 = st.text_input("BD4 (Batch4 Bulk Density)", value="")
-
-        # Fann 3'
-        f1 = st.text_input("F1 (Batch1 Fann @ 3')", value="")
-        f2 = st.text_input("F2 (Batch2 Fann @ 3')", value="")
-        f3 = st.text_input("F3 (Batch3 Fann @ 3')", value="")
-        f4 = st.text_input("F4 (Batch4 Fann @ 3')", value="")
-
-        # Fann 30'
-        fv1 = st.text_input("FV1 (Batch1 Fann @ 30')", value="")
-        fv2 = st.text_input("FV2 (Batch2 Fann @ 30')", value="")
-        fv3 = st.text_input("FV3 (Batch3 Fann @ 30')", value="")
-        fv4 = st.text_input("FV4 (Batch4 Fann @ 30')", value="")
-
-    submitted = st.form_submit_button("Generate COA")
-
-# --- On submit: build replacements and process template ---
-if submitted:
+# Generate button below tabs
+if st.button("Generate COA"):
     template_bytes = get_template_bytes(coa_type)
     if template_bytes is None:
-        st.error("Template not available. Provide via default path, upload, or GitHub raw URL.")
+        st.error("Template file not found in server path. Ensure the template file is present in the app directory.")
     else:
-        # load docx from bytes into python-docx Document
         try:
             doc = Document(io.BytesIO(template_bytes))
         except Exception as e:
@@ -309,49 +247,34 @@ if submitted:
             doc = None
 
         if doc:
-            # Build replacements based on COA type
             replacements = {}
-            # Date mapping: two templates use different date placeholder styles in your files:
-            # - MOD file uses {{DD/MM/YYYY}} (per inspection)
-            # - FAR file uses {{DD-MM-YYYY}}
-            # We'll populate both keys so whichever exists in template will be replaced.
+            # populate date placeholder - main requested format
             replacements["DD/MM/YYYY"] = date_field
-            replacements["DD-MM-YYYY"] = date_field
+            # also populate DD-MM-YYYY for templates that might use that format (keeps compatibility)
+            replacements["DD-MM-YYYY"] = date_field.replace("/", "-")
 
-            # Batch labels
-            replacements.update({
-                "BATCH_1": batch_1,
-                "BATCH_2": batch_2,
-                "BATCH_3": batch_3,
-                "BATCH_4": batch_4
-            })
+            # fill batch placeholders
+            for i in ("1", "2", "3", "4"):
+                replacements[f"BATCH_{i}"] = batches[i].get("BATCH", "")
+                replacements[f"M{i}"] = batches[i].get("M", "")
+                replacements[f"B{i}V1"] = batches[i].get("B1V1", "")
+                replacements[f"B{i}V2"] = batches[i].get("B1V2", "")
+                replacements[f"PH{i}"] = batches[i].get("PH", "")
+                if coa_type == "FAR":
+                    replacements[f"MESH{i}"] = batches[i].get("MESH", "")
+                    replacements[f"BD{i}"] = batches[i].get("BD", "")
+                    replacements[f"F{i}"] = batches[i].get("F", "")
+                    replacements[f"FV{i}"] = batches[i].get("FV", "")
 
-            # Common moisture & viscosities & pH
-            replacements.update({
-                "M1": m1, "M2": m2, "M3": m3, "M4": m4,
-                "B1V1": b1v1, "B2V1": b2v1, "B3V1": b3v1, "B4V1": b4v1,
-                "B1V2": b1v2, "B2V2": b2v2, "B3V2": b3v2, "B4V2": b4v2,
-                "PH1": ph1, "PH2": ph2, "PH3": ph3, "PH4": ph4
-            })
-
-            # Additional FAR-only fields
-            if coa_type == "FAR":
-                replacements.update({
-                    "MESH1": mesh1, "MESH2": mesh2, "MESH3": mesh3, "MESH4": mesh4,
-                    "BD1": bd1, "BD2": bd2, "BD3": bd3, "BD4": bd4,
-                    "F1": f1, "F2": f2, "F3": f3, "F4": f4,
-                    "FV1": fv1, "FV2": fv2, "FV3": fv3, "FV4": fv4
-                })
-
-            # Perform replacement
+            # perform replacements
             advanced_replace_text_preserving_style(doc, replacements)
 
-            # Save to BytesIO
+            # save to bytes
             out_buffer = io.BytesIO()
             doc.save(out_buffer)
             out_bytes = out_buffer.getvalue()
 
-            # Preview using mammoth (HTML)
+            # preview
             try:
                 html = docx_to_html_bytes(out_bytes)
                 st.subheader("📄 Preview (HTML)")
@@ -359,13 +282,11 @@ if submitted:
             except Exception as e:
                 st.warning(f"Preview (mammoth) failed: {e}. You can still download the DOCX.")
 
-            # Download button
-            filename = f"COA_{coa_type}_{batch_1 or 'batch'}.docx"
+            filename = f"COA_{coa_type}_{batches['1'].get('BATCH','batch1')}.docx"
             st.download_button(
                 label="📥 Download generated DOCX",
                 data=out_bytes,
                 file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-
             st.success("Generated. Open the downloaded DOCX in MS Word to confirm visual formatting.")
