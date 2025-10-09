@@ -16,7 +16,7 @@ except Exception:
 st.set_page_config(page_title="ModFar COA Generator", layout="wide")
 st.title("📄 ModFar COA Generator")
 
-# --- Defaults: local paths (these match the files you uploaded) ---
+# --- Defaults: local paths (these must be present in app directory) ---
 DEFAULT_TEMPLATES = {
     "MOD": "PH LIPL MOD COA.docx",
     "FAR": "PH LIPL FAR COA.docx"
@@ -143,7 +143,7 @@ def docx_to_html_bytes(docx_bytes):
     result = mammoth.convert_to_html(io.BytesIO(docx_bytes))
     return result.value
 
-# --- Simplified template retrieval: only local default templates are used --- 
+# --- Simplified template retrieval: only local default templates are used ---
 def get_template_bytes(coa_type):
     path = DEFAULT_TEMPLATES.get(coa_type)
     if path and os.path.exists(path):
@@ -151,20 +151,49 @@ def get_template_bytes(coa_type):
             return f.read()
     return None
 
-# --- Default date (DD/MM/YYYY) in Asia/Kolkata timezone, editable by user ---
+# --- Extract last-3-digit code from PO ID with fallbacks ---
+def extract_3digit_code(po_id: str) -> str:
+    if not po_id:
+        return "000"
+    # remove spaces
+    candidate = str(po_id).strip()
+    # try digits first
+    digits = re.findall(r'\d', candidate)
+    if len(digits) >= 3:
+        return ''.join(digits[-3:])
+    # fallback to alnum characters
+    alnum = re.findall(r'[A-Za-z0-9]', candidate)
+    if len(alnum) >= 3:
+        return ''.join(alnum[-3:]).upper()
+    # final fallback: remove non-alnum and pad if needed
+    cleaned = re.sub(r'[^A-Za-z0-9]', '', candidate)
+    if len(cleaned) >= 3:
+        return cleaned[-3:].upper()
+    return cleaned.zfill(3)
+
+# --- UI: tabs: General + Batch1..Batch4 (batch-by-batch entry) ---
 now_kolkata = datetime.now(KOLKATA)
 default_ddmmyyyy_slash = now_kolkata.strftime("%d/%m/%Y")  # DD/MM/YYYY
 
-st.markdown("### Enter values (fill Batch 1 completely, then Batch 2, then Batch 3, then Batch 4)")
+st.markdown("### Enter values (fill General first, then Batch 1, then Batch 2, then Batch 3, then Batch 4)")
 coa_type = st.selectbox("Choose COA type", ["MOD", "FAR"])
 
-# Use tabs: one tab per batch to enforce batch-by-batch entry
-tab1, tab2, tab3, tab4 = st.tabs(["Batch 1", "Batch 2", "Batch 3", "Batch 4"])
+tab_general, tab1, tab2, tab3, tab4 = st.tabs(["General", "Batch 1", "Batch 2", "Batch 3", "Batch 4"])
 
-# holder for batch inputs
+# store inputs in dicts
 batches = {"1": {}, "2": {}, "3": {}, "4": {}}
+# default general values
+po_id = ""
+total_containers = 1
+current_container = 1
 
-# Date input placed in Batch 1 tab (editable)
+with tab_general:
+    st.subheader("General (used only for filename)")
+    po_id = st.text_input("P.O. ID (used for filename only)", value="", key="po_id")
+    total_containers = st.number_input("Total Number of Containers", min_value=1, step=1, value=1, key="total_containers")
+    current_container = st.number_input("Current Container Number", min_value=1, step=1, value=1, key="current_container")
+    st.info("These values will not be written into the DOCX — they are used only to create the output filename.")
+
 with tab1:
     st.subheader("Batch 1")
     date_field = st.text_input("Date (DD/MM/YYYY)", value=default_ddmmyyyy_slash, key="date_field")
@@ -236,57 +265,70 @@ with tab4:
 
 # Generate button below tabs
 if st.button("Generate COA"):
-    template_bytes = get_template_bytes(coa_type)
-    if template_bytes is None:
-        st.error("Template file not found in server path. Ensure the template file is present in the app directory.")
+    # basic validation for container numbers
+    if current_container > total_containers:
+        st.error("Current container cannot be greater than total containers.")
     else:
-        try:
-            doc = Document(io.BytesIO(template_bytes))
-        except Exception as e:
-            st.error(f"Failed to open template as docx: {e}")
-            doc = None
-
-        if doc:
-            replacements = {}
-            # populate date placeholder - main requested format
-            replacements["DD/MM/YYYY"] = date_field
-            # also populate DD-MM-YYYY for templates that might use that format (keeps compatibility)
-            replacements["DD-MM-YYYY"] = date_field.replace("/", "-")
-
-            # fill batch placeholders
-            for i in ("1", "2", "3", "4"):
-                replacements[f"BATCH_{i}"] = batches[i].get("BATCH", "")
-                replacements[f"M{i}"] = batches[i].get("M", "")
-                replacements[f"B{i}V1"] = batches[i].get("B1V1", "")
-                replacements[f"B{i}V2"] = batches[i].get("B1V2", "")
-                replacements[f"PH{i}"] = batches[i].get("PH", "")
-                if coa_type == "FAR":
-                    replacements[f"MESH{i}"] = batches[i].get("MESH", "")
-                    replacements[f"BD{i}"] = batches[i].get("BD", "")
-                    replacements[f"F{i}"] = batches[i].get("F", "")
-                    replacements[f"FV{i}"] = batches[i].get("FV", "")
-
-            # perform replacements
-            advanced_replace_text_preserving_style(doc, replacements)
-
-            # save to bytes
-            out_buffer = io.BytesIO()
-            doc.save(out_buffer)
-            out_bytes = out_buffer.getvalue()
-
-            # preview
+        template_bytes = get_template_bytes(coa_type)
+        if template_bytes is None:
+            st.error("Template file not found in server path. Ensure the template file is present in the app directory.")
+        else:
             try:
-                html = docx_to_html_bytes(out_bytes)
-                st.subheader("📄 Preview (HTML)")
-                st.components.v1.html(f"<div style='padding:12px'>{html}</div>", height=700, scrolling=True)
+                doc = Document(io.BytesIO(template_bytes))
             except Exception as e:
-                st.warning(f"Preview (mammoth) failed: {e}. You can still download the DOCX.")
+                st.error(f"Failed to open template as docx: {e}")
+                doc = None
 
-            filename = f"COA_{coa_type}_{batches['1'].get('BATCH','batch1')}.docx"
-            st.download_button(
-                label="📥 Download generated DOCX",
-                data=out_bytes,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
-            st.success("Generated. Open the downloaded DOCX in MS Word to confirm visual formatting.")
+            if doc:
+                replacements = {}
+                # populate date placeholder - main requested format
+                replacements["DD/MM/YYYY"] = date_field
+                # also populate DD-MM-YYYY for templates that might use that format
+                replacements["DD-MM-YYYY"] = date_field.replace("/", "-")
+
+                # fill batch placeholders
+                for i in ("1", "2", "3", "4"):
+                    replacements[f"BATCH_{i}"] = batches[i].get("BATCH", "")
+                    replacements[f"M{i}"] = batches[i].get("M", "")
+                    replacements[f"B{i}V1"] = batches[i].get("B1V1", "")
+                    replacements[f"B{i}V2"] = batches[i].get("B1V2", "")
+                    replacements[f"PH{i}"] = batches[i].get("PH", "")
+                    if coa_type == "FAR":
+                        replacements[f"MESH{i}"] = batches[i].get("MESH", "")
+                        replacements[f"BD{i}"] = batches[i].get("BD", "")
+                        replacements[f"F{i}"] = batches[i].get("F", "")
+                        replacements[f"FV{i}"] = batches[i].get("FV", "")
+
+                # perform replacements
+                advanced_replace_text_preserving_style(doc, replacements)
+
+                # save to bytes
+                out_buffer = io.BytesIO()
+                doc.save(out_buffer)
+                out_bytes = out_buffer.getvalue()
+
+                # Build filename using PO id and container info (only for filename)
+                code3 = extract_3digit_code(po_id)
+                # safe integers
+                cur = int(current_container)
+                tot = int(total_containers)
+                if coa_type == "MOD":
+                    filename = f"COA_MOD_LIPL_{code3}_{cur}_of_{tot}.docx"
+                else:
+                    filename = f"COA_FAR_LIPL_{code3}_{cur}_of_{tot}.docx"
+
+                # preview
+                try:
+                    html = docx_to_html_bytes(out_bytes)
+                    st.subheader("📄 Preview (HTML)")
+                    st.components.v1.html(f"<div style='padding:12px'>{html}</div>", height=700, scrolling=True)
+                except Exception as e:
+                    st.warning(f"Preview (mammoth) failed: {e}. You can still download the DOCX.")
+
+                st.download_button(
+                    label="📥 Download generated DOCX",
+                    data=out_bytes,
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+                st.success(f"Generated. Filename: {filename}")
