@@ -21,8 +21,8 @@ st.title("📄 COA Placeholder Replacer — MOD / FAR (No calculations)")
 
 # --- Defaults: local paths (these match the files you uploaded) ---
 DEFAULT_TEMPLATES = {
-    "MOD": "/mnt/data/PH LIPL MOD COA.docx",
-    "FAR": "/mnt/data/PH LIPL FAR COA.docx"
+    "MOD": "PH LIPL MOD COA.docx",
+    "FAR": "PH LIPL FAR COA.docx"
 }
 
 # --- Regex for placeholders like {{KEY}} ---
