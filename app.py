@@ -175,7 +175,6 @@ def extract_3digit_code(po_id: str) -> str:
 now_kolkata = datetime.now(KOLKATA)
 default_ddmmyyyy_slash = now_kolkata.strftime("%d/%m/%Y")  # DD/MM/YYYY
 
-st.markdown("### Enter values (fill General first, then Batch 1, then Batch 2, then Batch 3, then Batch 4)")
 coa_type = st.selectbox("Choose COA type", ["MOD", "FAR"])
 
 tab_general, tab1, tab2, tab3, tab4 = st.tabs(["General", "Batch 1", "Batch 2", "Batch 3", "Batch 4"])
@@ -188,81 +187,79 @@ total_containers = 1
 current_container = 1
 
 with tab_general:
-    st.subheader("General (used only for filename)")
     # <-- pre-filled PO ID prefix here; user can edit or append -->
-    po_id = st.text_input("P.O. ID (used for filename only)", value="LIPL202526", key="po_id")
-    total_containers = st.number_input("Total Number of Containers", min_value=1, step=1, value=1, key="total_containers")
-    current_container = st.number_input("Current Container Number", min_value=1, step=1, value=1, key="current_container")
-    st.info("These values will not be written into the DOCX — they are used only to create the output filename.")
+    po_id = st.text_input("P.O. ID", value="LIPL202526", key="po_id")
+    total_containers = st.number_input("Total Container", min_value=1, step=1, value=1, key="total_containers")
+    current_container = st.number_input("Current Container", min_value=1, step=1, value=1, key="current_container")
 
 with tab1:
     st.subheader("Batch 1")
-    date_field = st.text_input("Date (DD/MM/YYYY)", value=default_ddmmyyyy_slash, key="date_field")
-    batches["1"]["BATCH"] = st.text_input("BATCH_1 (Label)", key="batch1_label")
-    batches["1"]["M"] = st.text_input("M1 (Moisture)", key="m1")
+    date_field = st.text_input("Date", value=default_ddmmyyyy_slash, key="date_field")
+    batches["1"]["BATCH"] = st.text_input("Batch Number", key="batch1_label")
+    batches["1"]["M"] = st.text_input("Moisture", key="m1")
     if coa_type == "MOD":
-        batches["1"]["B1V1"] = st.text_input("B1V1 (30min viscosity)", key="b1v1_mod")
-        batches["1"]["B1V2"] = st.text_input("B1V2 (60min viscosity)", key="b1v2_mod")
-        batches["1"]["PH"] = st.text_input("PH1 (pH)", key="ph1_mod")
+        batches["1"]["B1V1"] = st.text_input("30min Viscosity", key="b1v1_mod")
+        batches["1"]["B1V2"] = st.text_input("60min Viscosity", key="b1v2_mod")
+        batches["1"]["PH"] = st.text_input("pH", key="ph1_mod")
     else:
-        batches["1"]["B1V1"] = st.text_input("B1V1 (2h viscosity)", key="b1v1_far")
-        batches["1"]["B1V2"] = st.text_input("B1V2 (24h viscosity)", key="b1v2_far")
-        batches["1"]["PH"] = st.text_input("PH1 (pH)", key="ph1_far")
-        batches["1"]["MESH"] = st.text_input("MESH1 (200 mesh %)", key="mesh1")
-        batches["1"]["BD"] = st.text_input("BD1 (Bulk Density)", key="bd1")
-        batches["1"]["F"] = st.text_input("F1 (Fann 3')", key="f1")
-        batches["1"]["FV"] = st.text_input("FV1 (Fann 30')", key="fv1")
+        batches["1"]["B1V1"] = st.text_input("2h Viscosity", key="b1v1_far")
+        batches["1"]["B1V2"] = st.text_input("24h Viscosity", key="b1v2_far")
+        batches["1"]["PH"] = st.text_input("pH", key="ph1_far")
+        batches["1"]["MESH"] = st.text_input("200# Mesh", key="mesh1")
+        batches["1"]["BD"] = st.text_input("Bulk Density", key="bd1")
+        batches["1"]["F"] = st.text_input("Fann 3min", key="f1")
+        batches["1"]["FV"] = st.text_input("Fann 30min", key="fv1")
 
 with tab2:
     st.subheader("Batch 2")
-    batches["2"]["BATCH"] = st.text_input("BATCH_2 (Label)", key="batch2_label")
-    batches["2"]["M"] = st.text_input("M2 (Moisture)", key="m2")
+    batches["2"]["BATCH"] = st.text_input("Batch Number", key="batch2_label")
+    batches["2"]["M"] = st.text_input("Moisture", key="m2")
     if coa_type == "MOD":
-        batches["2"]["B1V1"] = st.text_input("B2V1 (30min viscosity)", key="b2v1_mod")
-        batches["2"]["B1V2"] = st.text_input("B2V2 (60min viscosity)", key="b2v2_mod")
-        batches["2"]["PH"] = st.text_input("PH2 (pH)", key="ph2_mod")
+        batches["2"]["B1V1"] = st.text_input("30min Viscosity", key="b2v1_mod")
+        batches["2"]["B1V2"] = st.text_input("60min Viscosity", key="b2v2_mod")
+        batches["2"]["PH"] = st.text_input("pH", key="ph2_mod")
     else:
-        batches["2"]["B1V1"] = st.text_input("B2V1 (2h viscosity)", key="b2v1_far")
-        batches["2"]["B1V2"] = st.text_input("B2V2 (24h viscosity)", key="b2v2_far")
-        batches["2"]["PH"] = st.text_input("PH2 (pH)", key="ph2_far")
-        batches["2"]["MESH"] = st.text_input("MESH2 (200 mesh %)", key="mesh2")
-        batches["2"]["BD"] = st.text_input("BD2 (Bulk Density)", key="bd2")
-        batches["2"]["F"] = st.text_input("F2 (Fann 3')", key="f2")
-        batches["2"]["FV"] = st.text_input("FV2 (Fann 30')", key="fv2")
+        batches["2"]["B1V1"] = st.text_input("2h viscosity", key="b2v1_far")
+        batches["2"]["B1V2"] = st.text_input("24h viscosity", key="b2v2_far")
+        batches["2"]["PH"] = st.text_input("pH", key="ph2_far")
+        batches["2"]["MESH"] = st.text_input("200# Mesh", key="mesh2")
+        batches["2"]["BD"] = st.text_input("Bulk Density", key="bd2")
+        batches["2"]["F"] = st.text_input("Fann 3min", key="f2")
+        batches["2"]["FV"] = st.text_input("Fann 30min", key="fv2")
 
 with tab3:
     st.subheader("Batch 3")
-    batches["3"]["BATCH"] = st.text_input("BATCH_3 (Label)", key="batch3_label")
-    batches["3"]["M"] = st.text_input("M3 (Moisture)", key="m3")
+    batches["3"]["BATCH"] = st.text_input("Batch Number", key="batch3_label")
+    batches["3"]["M"] = st.text_input("Moisture", key="m3")
     if coa_type == "MOD":
-        batches["3"]["B1V1"] = st.text_input("B3V1 (30min viscosity)", key="b3v1_mod")
-        batches["3"]["B1V2"] = st.text_input("B3V2 (60min viscosity)", key="b3v2_mod")
-        batches["3"]["PH"] = st.text_input("PH3 (pH)", key="ph3_mod")
+        batches["3"]["B1V1"] = st.text_input("30min Viscosity", key="b3v1_mod")
+        batches["3"]["B1V2"] = st.text_input("60min Viscosity", key="b3v2_mod")
+        batches["3"]["PH"] = st.text_input("pH", key="ph3_mod")
     else:
-        batches["3"]["B1V1"] = st.text_input("B3V1 (2h viscosity)", key="b3v1_far")
-        batches["3"]["B1V2"] = st.text_input("B3V2 (24h viscosity)", key="b3v2_far")
-        batches["3"]["PH"] = st.text_input("PH3 (pH)", key="ph3_far")
-        batches["3"]["MESH"] = st.text_input("MESH3 (200 mesh %)", key="mesh3")
-        batches["3"]["BD"] = st.text_input("BD3 (Bulk Density)", key="bd3")
-        batches["3"]["F"] = st.text_input("F3 (Fann 3')", key="f3")
-        batches["3"]["FV"] = st.text_input("FV3 (Fann 30')", key="fv3")
+        batches["3"]["B1V1"] = st.text_input("2h Viscosity", key="b3v1_far")
+        batches["3"]["B1V2"] = st.text_input("24h Viscosity", key="b3v2_far")
+        batches["3"]["PH"] = st.text_input("pH", key="ph3_far")
+        batches["3"]["MESH"] = st.text_input("200# Mesh)", key="mesh3")
+        batches["3"]["BD"] = st.text_input("Bulk Density", key="bd3")
+        batches["3"]["F"] = st.text_input("Fann 3min", key="f3")
+        batches["3"]["FV"] = st.text_input("Fann 30min", key="fv3")
 
 with tab4:
     st.subheader("Batch 4")
-    batches["4"]["BATCH"] = st.text_input("BATCH_4 (Label)", key="batch4_label")
-    batches["4"]["M"] = st.text_input("M4 (Moisture)", key="m4")
+    batches["4"]["BATCH"] = st.text_input("Batch Number", key="batch4_label")
+    batches["4"]["M"] = st.text_input("Moisture", key="m4")
     if coa_type == "MOD":
-        batches["4"]["B1V1"] = st.text_input("B4V1 (30min viscosity)", key="b4v1_mod")
-        batches["4"]["B1V2"] = st.text_input("B4V2 (60min viscosity)", key="b4v2_mod")
-        batches["4"]["PH"] = st.text_input("PH4 (pH)", key="ph4_mod")
+        batches["4"]["B1V1"] = st.text_input("30min Viscosity", key="b4v1_mod")
+        batches["4"]["B1V2"] = st.text_input("60min Viscosity", key="b4v2_mod")
+        batches["4"]["PH"] = st.text_input("pH", key="ph4_mod")
     else:
-        batches["4"]["B1V1"] = st.text_input("B4V1 (2h viscosity)", key="b4v1_far")
-        batches["4"]["B1V2"] = st.text_input("B4V2 (24h viscosity)", key="b4v2_far")
-        batches["4"]["PH"] = st.text_input("PH4 (pH)", key="ph4_far")
-        batches["4"]["MESH"] = st.text_input("MESH4 (200 mesh %)", key="mesh4")
-        batches["4"]["BD"] = st.text_input("BD4 (Bulk Density)", key="bd4")
-        batches["4"]["F"] = st.text_input("F4 (Fann 3')", key="f4")
-        batches["4"]["FV"] = st.text_input("FV4 (Fann 30')", key="fv4")
+        batches["4"]["B1V1"] = st.text_input("2h Viscosity", key="b4v1_far")
+        batches["4"]["B1V2"] = st.text_input("24h Viscosity", key="b4v2_far")
+        batches["4"]["PH"] = st.text_input("pH", key="ph4_far")
+        batches["4"]["MESH"] = st.text_input("200# Mesh", key="mesh4")
+        batches["4"]["BD"] = st.text_input("Bulk Density", key="bd4")
+        batches["4"]["F"] = st.text_input("Fann 3min", key="f4")
+        batches["4"]["FV"] = st.text_input("Fann 30min", key="fv4")
 
 # Generate button below tabs
 if st.button("Generate COA"):
